@@ -1,5 +1,6 @@
 # coding=utf-8
 import timeit
+import datetime
 from collections import OrderedDict
 
 import copy
@@ -122,6 +123,7 @@ class InputModule(AbstractInput):
         self.return_dict = copy.deepcopy(measurements_dict)
 
         self.device.read_state()
+        timestamp = datetime.datetime.utcnow()
         for channel in self.channels_measurement:
             if self.is_enabled(channel):
                 last_measurement = None
@@ -144,7 +146,7 @@ class InputModule(AbstractInput):
                     case _:
                         do_set_value = True
                 if (do_set_value):
-                    self.value_set(channel, port_value)
+                    self.value_set(channel, port_value, timestamp=timestamp)
                     update_count = 0
                     channels_dict[channel]['last_measurement'] = port_value
                     self.logger.debug(f"value_set: {channel}, Value: {port_value}")
