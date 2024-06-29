@@ -10,22 +10,6 @@ from mycodo.inputs.base_input import AbstractInput
 from mycodo.utils.database import db_retrieve_table_daemon
 from mycodo.databases.models import InputChannel
 
-def constraints_pass_measurement_repetitions(mod_input, value):
-    """
-    Check if the user input is acceptable
-    :param mod_input: SQL object with user-saved Input options
-    :param value: integer
-    :return: tuple: (bool, list of strings)
-    """
-    errors = []
-    all_passed = True
-    # Ensure 1 <= value <= 1000
-    if value < 1 or value > 1000:
-        all_passed = False
-        errors.append("Must be a positive value between 1 and 1000")
-    return all_passed, errors, mod_input
-
-
 # Measurements
 measurements_dict = OrderedDict()
 channels_dict = OrderedDict()
@@ -147,31 +131,23 @@ class InputModule(AbstractInput):
                     last_measurement = channels_dict[channel]['last_measurement']
                     update_mode = channels_dict[channel]['update_mode']
                     update_count = channels_dict[channel]['update_count']
-                port_value = self.device.read_pin_state(channel)
+                port_value = self.device.read_pin_from_state(channel)
                 self.logger.debug(f"Read Channel: {channel}, last_measurement: {last_measurement}, port_value: {port_value}, update_mode: {update_mode}, update_count: {update_count}")
+                do_set_value = False
                 match update_mode:
                     case 'periodic':
-                        self.value_set(channel, port_value)
-                        update_count = 0
-                        channels_dict[channel]['last_measurement'] = port_value
-                        self.logger.debug(f"value_set: {channel}, Value: {port_value}")
+                        do_set_value = True
                     case 'on_change':
-                        if port_value != last_measurement:
-                            self.value_set(channel, port_value)
-                            update_count = 0
-                            channels_dict[channel]['last_measurement'] = port_value
-                            self.logger.debug(f"value_set: {channel}, Value: {port_value}")
+                        do_set_value = bool(port_value != last_measurement)
                     case 'periodic_on_change':
-                        if (port_value != last_measurement) or (update_count >= 60):
-                            self.value_set(channel, port_value)
-                            update_count = 0
-                            channels_dict[channel]['last_measurement'] = port_value
-                            self.logger.debug(f"value_set: {channel}, Value: {port_value}")
+                        do_set_value = bool((port_value != last_measurement) or (update_count >= 60))
                     case _:
-                        self.value_set(channel, port_value)
-                        update_count = 0
-                        channels_dict[channel]['last_measurement'] = port_value
-                        self.logger.debug(f"value_set: {channel}, Value: {port_value}")
+                        do_set_value = True
+                if (do_set_value):
+                    self.value_set(channel, port_value)
+                    update_count = 0
+                    channels_dict[channel]['last_measurement'] = port_value
+                    self.logger.debug(f"value_set: {channel}, Value: {port_value}")
                 update_count = update_count + 1
                 channels_dict[channel]['update_count'] = update_count
         
@@ -215,7 +191,7 @@ class PCF8574:
         new_state = 0
         for i, val in enumerate(value):
             if val:
-                new_state |= 1 << 7 - i
+                new_state |= 1 << i
         self.bus.write_byte(self.address, new_state)
 
     def set_output(self, output_number, value):
@@ -227,7 +203,7 @@ class PCF8574:
             8
         ), "Output number must be an integer between 0 and 7"
         current_state = self.bus.read_byte(self.address)
-        bit = 1 << 7 - output_number
+        bit = 1 << output_number
         new_state = current_state | bit if value else current_state & (~bit & 0xFF)
         self.bus.write_byte(self.address, new_state)
 
@@ -238,7 +214,7 @@ class PCF8574:
         """
         assert pin_number in range(8), "Pin number must be an integer between 0 and 7"
         state = self.bus.read_byte(self.address)
-        return bool(state & 1 << 7 - pin_number)
+        return bool(state & 1 << pin_number)
     
     def read_state(self):
         # type: (int) -> None
@@ -247,10 +223,11 @@ class PCF8574:
         """
         self.state = self.bus.read_byte(self.address)
 
-    def read_pin_state(self, pin_number):
+    def read_pin_from_state(self, pin_number):
         # type: (int) -> bool
         """
         Get the boolean state of an individual pin.
         """
+        assert not self.state is None
         assert pin_number in range(8), "Pin number must be an integer between 0 and 7"
-        return bool(self.state & 1 << 7 - pin_number)
+        return bool(self.state & 1 << pin_number)
