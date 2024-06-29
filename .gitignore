@@ -244,3 +244,5 @@ mycodo/mycodo_flask/templates/user_templates/
 mycodo/scripts/mycodo_wrapper
 .pylint.d/
 mycodo/user_python_code/
+mycodo-devrun
+.language
