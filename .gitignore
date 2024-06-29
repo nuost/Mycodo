@@ -235,3 +235,12 @@ docs-old/_build/
 
 # PyBuilder
 target/
+
+.dependency
+mycodo/flask_session/
+mycodo/mycodo_flask/ssl_certs/
+mycodo/mycodo_flask/static/js/user_js/
+mycodo/mycodo_flask/templates/user_templates/
+mycodo/scripts/mycodo_wrapper
+.pylint.d/
+mycodo/user_python_code/
