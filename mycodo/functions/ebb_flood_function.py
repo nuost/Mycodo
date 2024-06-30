@@ -29,18 +29,28 @@ measurements_dict = {
     },
     1: {
         'measurement': '',
+        'unit': 'none',
+        'name': 'Error count',
+    },
+    2: {
+        'measurement': '',
         'unit': 's',
         'name': 'Flooding time',
     },
-    2: {
+    3: {
         'measurement': '',
         'unit': 'l',
         'name': 'Flooding volume',
     },
-    3: {
+    4: {
         'measurement': '',
-        'unit': 'none',
-        'name': 'Error count',
+        'unit': 's',
+        'name': 'Draining time',
+    },
+    5: {
+        'measurement': '',
+        'unit': 's',
+        'name': 'Low water time',
     },
 }
 
@@ -72,10 +82,23 @@ FUNCTION_INFORMATION = {
             'phrase': lazy_gettext('The duration between measurements or actions')
         },
         {
-            'type': 'new_line'
+            'type': 'message',
+            'default_value': "Select inputs to react on ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
         },
         {
-            'id': 'measurement_waterlevel',
+            'id': 'measurement_min_waterlevel',
+            'type': 'select_measurement',
+            'default_value': '',
+            'required': False,
+            'options_select': [
+                'Input',
+                'Function'
+            ],
+            'name': lazy_gettext('Min water level Measurement'),
+            'phrase': lazy_gettext('Select a measurement for minimum water level')
+        },
+        {
+            'id': 'measurement_flood_waterlevel',
             'type': 'select_measurement',
             'default_value': '',
             'required': True,
@@ -83,7 +106,7 @@ FUNCTION_INFORMATION = {
                 'Input',
                 'Function'
             ],
-            'name': lazy_gettext('Level Measurement'),
+            'name': lazy_gettext('Flood level Measurement'),
             'phrase': lazy_gettext('Select a measurement the selected output will affect')
         },
         {
@@ -96,7 +119,8 @@ FUNCTION_INFORMATION = {
             'phrase': lazy_gettext('The maximum age of the measurement to use')
         },
         {
-            'type': 'new_line'
+            'type': 'message',
+            'default_value': "Select outputs to operate ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
         },
         {
             'id': 'output_waterpump',
@@ -147,13 +171,35 @@ FUNCTION_INFORMATION = {
             'phrase': lazy_gettext('The maximum time to turn the output on')
         },
         {
+            'type': 'message',
+            'default_value': "Set timings ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+        },
+        {
             'id': 'max_flooding_time',
             'type': 'float',
-            'default_value': 120,
+            'default_value': 110,
             'required': True,
             'constraints_pass': constraints_pass_positive_value,
-            'name': "{} ({})".format(lazy_gettext('max filling time'), lazy_gettext('Seconds')),
+            'name': "{} ({})".format(lazy_gettext('Maximum flooding time'), lazy_gettext('Seconds')),
             'phrase': lazy_gettext('The max duration to fill')
+        },
+        {
+            'id': 'flooding_overshoot',
+            'type': 'float',
+            'default_value': 5,
+            'required': True,
+            'constraints_pass': constraints_pass_positive_value,
+            'name': "{} ({})".format(lazy_gettext('Flooding overshoot time'), lazy_gettext('Seconds')),
+            'phrase': lazy_gettext('The time extension to flooding')
+        },
+        {
+            'id': 'max_draining_time',
+            'type': 'float',
+            'default_value': 60,
+            'required': True,
+            'constraints_pass': constraints_pass_positive_value,
+            'name': "{} ({})".format(lazy_gettext('Max. draining time'), lazy_gettext('Seconds')),
+            'phrase': lazy_gettext('The maximum time to wait until water is drained')
         }
     ]
 }
@@ -172,10 +218,13 @@ class CustomModule(AbstractFunction):
 
         # Initialize custom options
         self.period = None
-        self.measurement_waterlevel_device_id = None
-        self.measurement_waterlevel_device = None
-        self.measurement_waterlevel_measurement_id = None
-        self.measurement_waterlevel_max_age = None
+        self.measurement_flood_waterlevel_device_id = None
+        self.measurement_flood_waterlevel_device = None
+        self.measurement_flood_waterlevel_measurement_id = None
+        self.measurement_min_waterlevel_device_id = None
+        self.measurement_min_waterlevel_device = None
+        self.measurement_min_waterlevel_measurement_id = None
+        self.measurement_max_age = None
         self.output_waterpump_device_id = None
         self.output_waterpump_measurement_id = None
         self.output_waterpump_channel_id = None
@@ -192,10 +241,17 @@ class CustomModule(AbstractFunction):
         self.starting_tries = None
         self.filling_start = None
         self.max_flooding_time = None
+        self.flooding_overshoot = None
+        self.max_draining_time = None
         self.flooding_count = 0
         self.flooding_time = 0
+        self.overshoot_time = 0
+        self.flooded_high_time = 0
         self.flooding_volume = 0
+        self.draining_time = 0
+        self.low_water_time = 0
         self.error_count = 0
+        self.error_message = ""
 
         # Set custom options
         custom_function = db_retrieve_table_daemon(
@@ -214,32 +270,33 @@ class CustomModule(AbstractFunction):
         if None not in [self.output_valve2_channel_id , self.output_valve2_device_id]:
             self.output_valve2_channel = self.get_output_channel_from_channel_id(self.output_valve2_channel_id)
 
-        self.logger.info(
-            "Ebb-Flood controller started with options: "
-            "Level Measurement Device: {}, Level Measurement: {}, "
-            "Output Waterpump: {}, Output_Waterpump_Channel: {}, "
-            "Output Valve1: {}, Output_Valve1_Channel: {}, "
-            "Output Valve2: {}, Output_Valve2_Channel: {}, "
-            "Output_Max_Time: {}, Period: {}".format(
-                self.measurement_waterlevel_device_id,
-                self.measurement_waterlevel_measurement_id,
-                self.output_waterpump_device_id,
-                self.output_waterpump_channel,
-                self.output_valve1_device_id,
-                self.output_valve1_channel,
-                self.output_valve2_device_id,
-                self.output_valve2_channel,
-                self.output_max_time,
-                self.period))
+        self.logger.info(f"Ebb-Flood controller started with options: "
+            f"Period: {self.period}, "
+            f"Level Measurement Device: {self.measurement_flood_waterlevel_device_id}, "
+            f"Level Measurement: {self.measurement_flood_waterlevel_measurement_id}, "
+            f"Min-Level Measurement Device: {self.measurement_min_waterlevel_device_id}, "
+            f"Min-Level Measurement: {self.measurement_min_waterlevel_measurement_id}, "
+            f"Output Waterpump: {self.output_waterpump_device_id}, "
+            f"Output_Waterpump_Channel: {self.output_waterpump_channel}, "
+            f"Output Valve1: {self.output_valve1_device_id}, "
+            f"Output_Valve1_Channel: {self.output_valve1_channel}, "
+            f"Output Valve2: {self.output_valve2_device_id}, "
+            f"Output_Valve2_Channel: {self.output_valve2_channel}, "
+            f"Output_Max_Time: {self.output_max_time}, "
+            f"Max flooding time: {self.max_flooding_time}, "
+            f"Flooding overshoot: {self.flooding_overshoot} ")
 
         from transitions import Machine
-        self.states = ['idle', 'starting', 'filling', 'filled', 'error', 'shutdown']
+        self.states = ['idle', 'starting', 'filling', 'full', 'draining', 'drained', 'error', 'shutdown']
         self.machine = Machine(model=self, states=self.states, initial='idle')
         self.machine.add_transition('start', 'idle', dest='starting' )
         self.machine.add_transition('starting', 'starting', dest='starting', after='on_starting' )
         self.machine.add_transition('filling', 'starting', dest='filling' )
         self.machine.add_transition('filling', 'filling', dest='filling', after='on_filling' )
-        self.machine.add_transition('filled', 'filling', dest='filled', after='on_filled' )
+        self.machine.add_transition('full', 'filling', dest='full', after='on_full' )
+        self.machine.add_transition('drain', 'full', dest='draining' )
+        self.machine.add_transition('draining', 'draining', dest='draining', after='on_draining' )
+        self.machine.add_transition('drained', 'draining', dest='drained', after='on_drained' )
         self.machine.add_transition('error', '*', dest='error', after='on_error')
         self.machine.add_transition('shutdown', '*', dest='shutdown', after='on_shutdown')
 
@@ -255,8 +312,55 @@ class CustomModule(AbstractFunction):
                 match channel_no:
                     case 0:
                         self.flooding_count = last_measurement[1]
-                    case 3:
+                    case 1:
                         self.error_count = last_measurement[1]
+                        break
+
+    def read_flood_waterlevel(self):
+        # read current flood_waterlevel state
+
+        # force read of measurements
+        self.control.input_force_measurements(self.measurement_flood_waterlevel_device_id)
+        time.sleep(0.15)
+
+        # get last measurement
+        measurement = self.get_last_measurement(
+            self.measurement_flood_waterlevel_device_id, self.measurement_flood_waterlevel_measurement_id, max_age=self.measurement_max_age)
+        if not measurement:
+            self.logger.warning(f"Could not acquire water level measurement: device_id: {self.measurement_flood_waterlevel_device_id}, measurement_id: {self.measurement_flood_waterlevel_measurement_id}")
+            return None
+        self.logger.debug(f"flood water level measurement is {measurement}, age={time.time()-measurement[0]}, max_age={self.measurement_max_age}")        
+        if measurement[1] in [0, 0.0, False, 'off']:
+            return 0
+        if measurement[1] in [1, 1.0, True, 'on']: 
+            return 1
+        
+        self.logger.error(f"Invalid water level measurement returned: {measurement}.")
+        self.error()
+        return None
+
+    def read_basin_waterlevel(self):
+        # read current flood_waterlevel state
+
+        # force read of measurements
+        self.control.input_force_measurements(self.measurement_min_waterlevel_device_id)
+        time.sleep(0.15)
+
+        # get last measurement
+        min_measurement = self.get_last_measurement(
+            self.measurement_min_waterlevel_device_id, self.measurement_min_waterlevel_measurement_id, max_age=self.measurement_max_age)            
+        if not min_measurement:
+            self.logger.warning(f"Could not acquire a water min level measurement: device_id: {self.measurement_min_waterlevel_device_id}, measurement_id: {self.measurement_min_waterlevel_measurement_id}")
+            return None
+        self.logger.debug(f"Min Level measurement is {min_measurement}, max_age={self.measurement_max_age}, age={time.time()-min_measurement[0]}")
+        if min_measurement[1] in [0, 0.0, False, 'off']:
+            return 0
+        if min_measurement[1] in [1, 1.0, True, 'on']: 
+            return 1
+        
+        self.logger.error(f"Invalid min level measurement returned: {min_measurement}.")
+        self.error()
+        return None
 
     def loop(self):
 
@@ -275,12 +379,15 @@ class CustomModule(AbstractFunction):
                 self.trigger(self.state)
             case 'filling':
                 self.trigger(self.state)
+            case 'draining':
+                self.trigger(self.state)
     
     def on_starting(self):
         self.logger.debug(f"state: now in on_starting (try #{self.starting_tries})")
 
         # reset flooding time
         self.flooding_time = 0
+        self.low_water_time = 0
 
         # debug myself
         # for artef in dir(self): self.logger.debug(f"{artef}")
@@ -292,42 +399,63 @@ class CustomModule(AbstractFunction):
             self.error()
             return
 
-        if (self.max_flooding_time is None):
-            self.logger.error("max_flooding_time not set: Check setup values.")
+        if None in [self.max_flooding_time, self.flooding_overshoot]:
+            self.logger.error("max_flooding_time and/or flooding_overshoot not set: Check setup values.")
+            self.error()
+            return
+
+        # check measurement_flood_waterlevel_device_id
+        if None in [self.measurement_flood_waterlevel_device_id, self.measurement_flood_waterlevel_measurement_id]:
+            self.logger.error("Cannot start ebb-flood controller: Check if output channel(s) set: measurement_flood_waterlevel.")
             self.error()
             return
 
         # check output_waterpump_channel
         if (self.output_waterpump_channel is None):
-            self.logger.error("Cannot start ebb-flood controller: Check output channel(s).")
+            self.logger.error("Cannot start ebb-flood controller: Check if output channel(s) set: output_waterpump_channel.")
             self.error()
             return
 
+        # --- measurement_flood_waterlevel 
         # resolve measurement_device
-        self.measurement_waterlevel_device = db_retrieve_table_daemon(
-            Input, unique_id=self.measurement_waterlevel_device_id, entry='first')
-        if not self.measurement_waterlevel_device:
-            msg = f"Measurement device not found with ID {self.measurement_waterlevel_device_id}"
+        self.measurement_flood_waterlevel_device = db_retrieve_table_daemon(
+            Input, unique_id=self.measurement_flood_waterlevel_device_id, entry='first')
+        if not self.measurement_flood_waterlevel_device:
+            msg = f"Measurement device not found with ID {self.measurement_flood_waterlevel_device_id}"
             self.logger.error(msg)
             self.error()
             return
 
         # read current state
-        self.control.input_force_measurements(self.measurement_waterlevel_device_id)
+        self.control.input_force_measurements(self.measurement_flood_waterlevel_device_id)
         time.sleep(0.1)
-        measurement = self.get_last_measurement(
-            self.measurement_waterlevel_device_id, self.measurement_waterlevel_measurement_id, max_age=self.measurement_waterlevel_max_age)
-        self.logger.debug(f"Measurement is {measurement}, max_age={self.measurement_waterlevel_max_age}, age={time.time()-measurement[0]}")
+
+        # read current flood_waterlevel state
+        waterlevel = self.read_flood_waterlevel()
+        if waterlevel in [None, 1]:
+            self.logger.error(f"Flood water level measurement is invalid or non-zero: {waterlevel} - trying again")
+            return 
+
+        # --- measurement_min_waterlevel 
+        if not (self.measurement_min_waterlevel_measurement_id is None):
+            # resolve measurement_device
+            self.measurement_min_waterlevel_device = db_retrieve_table_daemon(
+                Input, unique_id=self.measurement_min_waterlevel_device_id, entry='first')
+            if not self.measurement_min_waterlevel_device:
+                msg = f"Min waterlevel measurement device with ID {self.measurement_min_waterlevel_device_id} not found."
+                self.logger.error(msg)
+                self.error()
+                return
+
+            basin_waterlevel = self.read_basin_waterlevel()
+            if basin_waterlevel is None:
+                return
+            if basin_waterlevel == 0:
+                self.logger.error(f"Min water level measurement is null: trying again")
+                return
+            
+        # we are good to go
         
-        if not measurement:
-            self.logger.error(f"Could not acquire a measurement: device_id: {self.measurement_waterlevel_device_id}, measurement_id: {self.measurement_waterlevel_measurement_id}")
-            self.error()
-            return
-
-        if measurement[1] not in [0, 0.0, False, 'off']:
-            self.logger.error(f"Measurement is non-zero: {measurement} - trying again")
-            return
-
         # turn on the pump
         self.logger.debug("Waterpump: On")
         self.control.output_on(
@@ -341,36 +469,20 @@ class CustomModule(AbstractFunction):
         
         self.fill_start_timestamp = time.time()
         self.flooding_time = 0
+        self.overshoot_time = 0
+        self.flooded_high_time = 0
         self.filling()
 
     def on_filling(self):
         self.flooding_time = time.time() - self.fill_start_timestamp
-        self.logger.debug(f"state: now in on_filling, flooding_time {self.flooding_time}")
+        self.logger.debug(f"state: now in on_filling, flooding_time: {self.flooding_time}, overshoot_time: {self.overshoot_time}")
 
         if (self.flooding_time > self.max_flooding_time):
             self.logger.error(f"Filling took too long - giving up")
             self.error()
             return
 
-        # read current state
-        self.control.input_force_measurements(self.measurement_waterlevel_device_id)
-        time.sleep(0.1)
-        measurement = self.get_last_measurement(
-            self.measurement_waterlevel_device_id, self.measurement_waterlevel_measurement_id, max_age=self.measurement_waterlevel_max_age)
-        self.logger.debug(f"Measurement is {measurement}, max_age={self.measurement_waterlevel_max_age}, age={time.time()-measurement[0]}")
-        
-        if not measurement:
-            self.logger.error(f"Could not acquire a measurement: device_id: {self.measurement_waterlevel_device_id}, measurement_id: {self.measurement_waterlevel_measurement_id}")
-            self.error()
-            return
-        if measurement[1] in [1, 1.0, True, 'on']:
-            self.on_filled()
-            return
-        if measurement[1] not in [0, 0.0, False, 'off']:
-            self.logger.error(f"Invalid measurement returned: {measurement}. Giving up.")
-            self.error()
-            return
-        
+        # check status of waterpump (did somebody turned it off?)
         output_waterpump_state = self.control.output_state(
             self.output_waterpump_device_id, self.output_waterpump_channel)
         if not output_waterpump_state:
@@ -382,12 +494,67 @@ class CustomModule(AbstractFunction):
             self.error()
             return
 
-    def on_filled(self):
-        self.logger.debug(f"state: now in on_filled")
+        if (not (self.measurement_min_waterlevel_measurement_id is None)) and (self.low_water_time == 0):
+            # resolve measurement_device
+            basin_waterlevel = self.read_basin_waterlevel()
+            if basin_waterlevel == 0:
+                self.low_water_time = time.time() - self.fill_start_timestamp;
+                self.logger.debug(f"Min water level detected after {self.low_water_time} seconds.")
+
+        # read current flood_waterlevel state
+        waterlevel = self.read_flood_waterlevel()
+        if waterlevel in [None]:
+            self.logger.error(f"Invalid measurement for water level: {waterlevel}. Giving up.")
+            self.error()
+        if waterlevel in [None, 0]:
+            return
+        
+        # sensor is on now
+        if ((self.flooded_high_time is None) or (self.flooded_high_time == 0)):
+            self.flooded_high_time = time.time()
+            self.logger.debug(f"Set flooded_high_time to {self.flooded_high_time}.")
+
+        # check overshoot period
+        self.overshoot_time = time.time() - self.flooded_high_time
+        if (self.overshoot_time < self.flooding_overshoot):
+            self.logger.debug(f"Sill in overshoot period: {self.overshoot_time} of {self.flooding_overshoot}.")
+            return
+        
+        # we are full
+        self.full()
+
+    def on_full(self):
+        self.logger.debug(f"state: now in on_full")
         self.flooding_count = self.flooding_count + 1
+        self.all_outputs_off()
+        self.draining_start_timestamp = time.time()
+        self.drain()
+
+    def on_draining(self):
+        self.draining_time = time.time() - self.draining_start_timestamp
+        self.logger.debug(f"state: now in on_draining")
+        
+        # check if we reached maximum drain time
+        if (self.draining_time > self.max_draining_time):
+            self.logger.error(f"Reached maximum drain time: {self.draining_time}. Giving up.")
+            self.error()
+            return 
+        
+        # read current flood_waterlevel state
+        waterlevel = self.read_flood_waterlevel()
+        if waterlevel in [None]:
+            self.logger.error(f"Invalid measurement for water level: {waterlevel}. Giving up.")
+            self.error()
+            return
+        if waterlevel in [0]:
+            self.drained()
+            return
+        
+    def on_drained(self):
+        self.logger.debug(f"state: now in on_drained")
         self.write_statistics()
         self.set_controller_off()
-        
+
     def on_error(self):
         self.logger.debug(f"state: now in on_error")
         self.error_count = self.error_count + 1
@@ -431,22 +598,27 @@ class CustomModule(AbstractFunction):
         self.shutdown()
 
     def all_outputs_off(self):
+        self.logger.debug(f"Turining off water pump.")
         self.control.output_off(
             self.output_waterpump_device_id, output_channel=self.output_waterpump_channel)
         if not self.output_valve1_channel is None:
+            self.logger.debug(f"Turining off valve 1.")
             self.control.output_off(
                 self.output_valve1_device_id, output_channel=self.output_valve1_channel)
         if not self.output_valve2_channel is None:
+            self.logger.debug(f"Turining off valve 2.")
             self.control.output_off(
                 self.output_valve2_device_id, output_channel=self.output_valve2_channel)
 
     def write_statistics(self):
-        # 'flooding_count', 'flooding_time', 'flooding_volume', 'error_count'
+        # 'flooding_count', 'error_count', 'flooding_time', 'flooding_volume', 'draining_time' 
         measure_dict = copy.deepcopy(measurements_dict)
         measure_dict[0]['value'] = self.flooding_count
-        measure_dict[1]['value'] = self.flooding_time
-        measure_dict[2]['value'] = self.flooding_volume
-        measure_dict[3]['value'] = self.error_count
+        measure_dict[1]['value'] = self.error_count
+        measure_dict[2]['value'] = self.flooding_time
+        measure_dict[3]['value'] = self.flooding_volume
+        measure_dict[4]['value'] = self.draining_time
+        measure_dict[5]['value'] = self.low_water_time
         self.logger.debug(f"writing statistics {measure_dict}")
         add_measurements_influxdb(self.unique_id, measure_dict)
 
