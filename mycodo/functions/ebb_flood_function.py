@@ -542,9 +542,9 @@ class CustomModule(AbstractFunction):
 
     def on_full(self):
         self.logger.debug(f"state: now in on_full")
-        if ((self.flooded_high_time is None) or (self.flooded_high_time == 0)):
-            self.flooded_high_time = time.time()
-            self.logger.debug(f"Set flooded_high_time to {self.flooded_high_time}.")
+        if (self.low_water_time == 0):
+            self.low_water_time = time.time() - self.fill_start_timestamp;
+            self.logger.debug(f"Min water level detected after {self.low_water_time} seconds (in state full).")
         self.flooding_count = self.flooding_count + 1
         self.all_outputs_off()
         self.draining_start_timestamp = time.time()
