@@ -70,7 +70,15 @@ FUNCTION_INFORMATION = {
     'options_enabled': [
         'measurements_configure'
     ],
-
+    'custom_commands': [
+        {
+            'id': 'button_reset_errors',  # This button will execute the "button_one(self, args_dict) function, below
+            'type': 'button',
+            'wait_for_return': True,  # The UI will wait until the function has returned the UI with a value to display
+            'name': 'Reset error counter',
+            'phrase': "Reset error counter"
+        },
+    ],
     'custom_options': [
         {
             'id': 'period',
@@ -200,7 +208,7 @@ FUNCTION_INFORMATION = {
             'constraints_pass': constraints_pass_positive_value,
             'name': "{} ({})".format(lazy_gettext('Max. draining time'), lazy_gettext('Seconds')),
             'phrase': lazy_gettext('The maximum time to wait until water is drained')
-        }
+        },
     ]
 }
 
@@ -361,6 +369,15 @@ class CustomModule(AbstractFunction):
         self.logger.error(f"Invalid min level measurement returned: {min_measurement}.")
         self.error()
         return None
+
+    def button_reset_errors(self, args_dict):
+        self.logger.debug("Button Reset Errors pressed!: {}".format(int(args_dict['button_one_value'])))
+        # 'flooding_count', 'error_count', 'flooding_time', 'flooding_volume', 'draining_time' 
+        measure_dict = copy.deepcopy(measurements_dict)
+        measure_dict_0 = {0: measure_dict[1]}
+        self.logger.debug(f"writing statistics {measure_dict_0}")
+        add_measurements_influxdb(self.unique_id, measure_dict_0)
+        return "Reset of error counter."
 
     def loop(self):
 
@@ -525,6 +542,9 @@ class CustomModule(AbstractFunction):
 
     def on_full(self):
         self.logger.debug(f"state: now in on_full")
+        if ((self.flooded_high_time is None) or (self.flooded_high_time == 0)):
+            self.flooded_high_time = time.time()
+            self.logger.debug(f"Set flooded_high_time to {self.flooded_high_time}.")
         self.flooding_count = self.flooding_count + 1
         self.all_outputs_off()
         self.draining_start_timestamp = time.time()
