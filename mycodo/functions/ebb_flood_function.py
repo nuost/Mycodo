@@ -19,7 +19,7 @@ from mycodo.databases.utils import session_scope
 from mycodo.config import MYCODO_DB_PATH
 from mycodo.utils.influx import add_measurements_influxdb
 from mycodo.utils.influx import read_influxdb_single
-from mycodo.utils.system_pi import return_measurement_info
+from mycodo.utils.system_pi import get_measurement
 
 measurements_dict = {
     0: {
@@ -258,9 +258,10 @@ class CustomModule(AbstractFunction):
         self.flooding_volume = 0
         self.draining_time = 0
         self.low_water_time = 0
+        self.cleaning_valves = 0
         self.error_count = 0
         self.error_message = ""
-
+        self.last_force_measurement_time = { }
         # Set custom options
         custom_function = db_retrieve_table_daemon(
             CustomController, unique_id=self.unique_id)
@@ -324,12 +325,19 @@ class CustomModule(AbstractFunction):
                         self.error_count = last_measurement[1]
                         break
 
-    def read_flood_waterlevel(self):
-        # read current flood_waterlevel state
+    def check_force_measurement(self, device_id):
+        time_now = time.time()
+        if (device_id in self.last_force_measurement_time):
+            if (time_now - self.last_force_measurement_time[device_id]<1):
+                self.logger.error(f"Ignoring check_force_measurement for {device_id}.")
+                return
+        self.control.input_force_measurements(device_id)
+        self.last_force_measurement_time[device_id] = time_now 
 
+    # read current flood_waterlevel state
+    def read_flood_waterlevel(self):
         # force read of measurements
-        self.control.input_force_measurements(self.measurement_flood_waterlevel_device_id)
-        time.sleep(0.15)
+        self.check_force_measurement(self.measurement_flood_waterlevel_device_id)
 
         # get last measurement
         measurement = self.get_last_measurement(
@@ -347,12 +355,10 @@ class CustomModule(AbstractFunction):
         self.error()
         return None
 
+    # read current basin_waterlevel state
     def read_basin_waterlevel(self):
-        # read current flood_waterlevel state
-
         # force read of measurements
-        self.control.input_force_measurements(self.measurement_min_waterlevel_device_id)
-        time.sleep(0.15)
+        self.check_force_measurement(self.measurement_flood_waterlevel_device_id)
 
         # get last measurement
         min_measurement = self.get_last_measurement(
@@ -398,6 +404,10 @@ class CustomModule(AbstractFunction):
                 self.trigger(self.state)
             case 'draining':
                 self.trigger(self.state)
+            case 'error':
+                self.set_controller_off()
+                raise Exception("Invalid error state in ebb_flood_function.")
+
     
     def on_starting(self):
         self.logger.debug(f"state: now in on_starting (try #{self.starting_tries})")
@@ -443,10 +453,6 @@ class CustomModule(AbstractFunction):
             self.error()
             return
 
-        # read current state
-        self.control.input_force_measurements(self.measurement_flood_waterlevel_device_id)
-        time.sleep(0.1)
-
         # read current flood_waterlevel state
         waterlevel = self.read_flood_waterlevel()
         if waterlevel in [None, 1]:
@@ -488,6 +494,7 @@ class CustomModule(AbstractFunction):
         self.flooding_time = 0
         self.overshoot_time = 0
         self.flooded_high_time = 0
+        self.cleaning_valves = 1
         self.filling()
 
     def on_filling(self):
@@ -510,6 +517,40 @@ class CustomModule(AbstractFunction):
             self.logger.error(f"Invalid measurement from waterpump: {output_waterpump_state}. Giving up.")
             self.error()
             return
+        
+        # cleanup valve1 in the first 20 sec
+        if (self.cleaning_valves >= 1):
+            if (self.flooding_time<=25):
+                self.cleaning_valves = self.cleaning_valves + 1
+                match (self.cleaning_valves % 4):
+                    case 0:
+                        self.logger.debug(f"cleaning valve: 1-")
+                        if not self.output_valve1_channel is None:
+                            self.control.output_on(
+                                self.output_valve1_device_id, output_channel=self.output_valve1_channel, amount=self.output_max_time)
+                    case 1:
+                        self.logger.debug(f"cleaning valve: X-")
+                        if not self.output_valve1_channel is None:
+                            self.control.output_off(
+                                self.output_valve1_device_id, output_channel=self.output_valve1_channel)
+                    case 2:
+                        self.logger.debug(f"cleaning valve: -2")
+                        if not self.output_valve2_channel is None:
+                            self.control.output_on(
+                                self.output_valve2_device_id, output_channel=self.output_valve2_channel, amount=self.output_max_time)
+                    case 3:
+                        self.logger.debug(f"cleaning valve: -X")
+                        if not self.output_valve2_channel is None:
+                            self.control.output_off(
+                                self.output_valve2_device_id, output_channel=self.output_valve2_channel)
+            else:
+                self.cleaning_valves = False
+                if not self.output_valve1_channel is None:
+                    self.control.output_on(
+                        self.output_valve1_device_id, output_channel=self.output_valve1_channel, amount=self.output_max_time)
+                if not self.output_valve2_channel is None:
+                    self.control.output_on(
+                        self.output_valve2_device_id, output_channel=self.output_valve2_channel, amount=self.output_max_time)
 
         if (not (self.measurement_min_waterlevel_measurement_id is None)) and (self.low_water_time == 0):
             # resolve measurement_device
