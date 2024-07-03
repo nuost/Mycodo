@@ -209,6 +209,15 @@ FUNCTION_INFORMATION = {
             'name': "{} ({})".format(lazy_gettext('Max. draining time'), lazy_gettext('Seconds')),
             'phrase': lazy_gettext('The maximum time to wait until water is drained')
         },
+        {
+            'id': 'valve_cleaning_time',
+            'type': 'float',
+            'default_value': 30,
+            'required': True,
+            'constraints_pass': constraints_pass_positive_value,
+            'name': "{} ({})".format(lazy_gettext('Valve cleaning time'), lazy_gettext('Seconds')),
+            'phrase': lazy_gettext('Valve cleaning time')
+        },
     ]
 }
 
@@ -251,6 +260,7 @@ class CustomModule(AbstractFunction):
         self.max_flooding_time = None
         self.flooding_overshoot = None
         self.max_draining_time = None
+        self.valve_cleaning_time = 0
         self.flooding_count = 0
         self.flooding_time = 0
         self.overshoot_time = 0
@@ -520,7 +530,7 @@ class CustomModule(AbstractFunction):
         
         # cleanup valve1 in the first 20 sec
         if (self.cleaning_valves >= 1):
-            if (self.flooding_time<=25):
+            if (self.flooding_time < self.valve_cleaning_time):
                 self.cleaning_valves = self.cleaning_valves + 1
                 match (self.cleaning_valves % 4):
                     case 0:
@@ -544,7 +554,7 @@ class CustomModule(AbstractFunction):
                             self.control.output_off(
                                 self.output_valve2_device_id, output_channel=self.output_valve2_channel)
             else:
-                self.cleaning_valves = False
+                self.cleaning_valves = 0
                 if not self.output_valve1_channel is None:
                     self.control.output_on(
                         self.output_valve1_device_id, output_channel=self.output_valve1_channel, amount=self.output_max_time)
