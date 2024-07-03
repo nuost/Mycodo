@@ -134,7 +134,7 @@ class InputModule(AbstractInput):
                     update_mode = channels_dict[channel]['update_mode']
                     update_count = channels_dict[channel]['update_count']
                 port_value = self.device.read_pin_from_state(channel)
-                self.logger.debug(f"Read Channel: {channel}, last_measurement: {last_measurement}, port_value: {port_value}, update_mode: {update_mode}, update_count: {update_count}")
+                self.logger.debug(f"Read Channel: {channel}, port_value: {port_value}, last_measurement: {last_measurement}, update_mode: {update_mode}, update_count: {update_count}")
                 do_set_value = False
                 match update_mode:
                     case 'periodic':
@@ -149,7 +149,6 @@ class InputModule(AbstractInput):
                     self.value_set(channel, port_value, timestamp=timestamp)
                     update_count = 0
                     channels_dict[channel]['last_measurement'] = port_value
-                    self.logger.debug(f"value_set: {channel}, Value: {port_value}")
                 update_count = update_count + 1
                 channels_dict[channel]['update_count'] = update_count
         
