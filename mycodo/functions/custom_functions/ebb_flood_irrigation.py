@@ -387,12 +387,15 @@ class CustomModule(AbstractFunction):
         return None
 
     def button_reset_errors(self, args_dict):
-        self.logger.debug("Button Reset Errors pressed!: {}".format(int(args_dict['button_one_value'])))
+        self.logger.debug("executing button_reset_errors")
+        # self.logger.debug("Button Reset Errors pressed!: {}".format(int(args_dict['button_one_value'])))
         # 'flooding_count', 'error_count', 'flooding_time', 'flooding_volume', 'draining_time' 
         measure_dict = copy.deepcopy(measurements_dict)
-        measure_dict_0 = {0: measure_dict[1]}
-        self.logger.debug(f"writing statistics {measure_dict_0}")
-        add_measurements_influxdb(self.unique_id, measure_dict_0)
+        measure_set0 = { 0: measure_dict[0], 1: measure_dict[1] }
+        measure_set0[0]['value'] = 0
+        measure_set0[1]['value'] = 0
+        self.logger.debug(f"writing statistics {measure_set0}")
+        add_measurements_influxdb(self.unique_id, measure_set0)
         return "Reset of error counter."
 
     def loop(self):
